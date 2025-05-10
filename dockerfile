@@ -8,5 +8,7 @@ WORKDIR /OvertimeHoursCalculation
 # 安装依赖
 RUN uv sync --locked
 
+EXPOSE 5000
+
 # 运行应用
 CMD ["uv", "run", "app.py"]
