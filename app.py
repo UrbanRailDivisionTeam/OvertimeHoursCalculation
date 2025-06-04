@@ -35,7 +35,7 @@ def calculate_overtime(row, non_working_days, working_days):
     
     if is_workday:
         # 工作日加班时间计算
-        start_overtime = pd.to_datetime('18:30', format='%H:%M')
+        start_overtime = pd.to_datetime('18:30', format='%H:%M')  # 修改为18:30
         end_overtime = pd.to_datetime('23:55', format='%H:%M')
         for time in card_times:
             if start_overtime <= time <= end_overtime:
@@ -94,44 +94,51 @@ def index():
         # 合并考勤记录和人员单位信息
         df = pd.merge(df_attendance, df_units, on=['工号', '姓名'])
         
-        # 过滤部门包含"组"的记录
-        df = df[df['部门'].str.contains('组')]
+        # 过滤部门包含"组"但不包含"外派组"的记录
+        df = df[df['部门'].str.contains('组') & ~df['部门'].str.contains('外派组')]
+        
+        # 确保"单位部门"列存在
+        if '单位部门' not in df.columns:
+            df['单位部门'] = df['单位'] + df['部门']
+        
+        # 过滤掉"刷卡数据"为空的记录
+        df = df[df['刷卡数据'].notna()]
         
         # 计算加班时长和加班时间段
         df[['加班时长', '加班时间段']] = df.apply(calculate_overtime, axis=1, result_type='expand', args=(non_working_days, working_days))
         
-        # 过滤掉加班时长为0的记录
-        df = df[df['加班时长'] > 0]
+        # 找出没有任何加班记录的员工
+        df_no_overtime = df.groupby(['工号', '姓名', '单位', '部门', '单位部门']).agg({'加班时长': 'sum'}).reset_index()
+        df_no_overtime = df_no_overtime[df_no_overtime['加班时长'] == 0]
         
-        # 删除不需要的字段
-        df = df.drop(columns=['班次', '上班时长', '出勤类型', '时段', '时长'])
+        # 计算每个单位部门的人数（基于所有有考勤记录的员工）
+        department_counts = df.groupby(['单位', '部门', '单位部门'])['工号'].nunique().reset_index(name='人数')
         
-        # 修改"部门"字段为"单位部门"
-        df['单位部门'] = df['单位'] + df['部门']
+        # 计算每个单位的人数（基于所有有考勤记录的员工）
+        unit_counts = df.groupby('单位')['工号'].nunique().reset_index(name='人数')
         
-        # 按单位部门和工号排序
-        df_sorted = df.sort_values(by=['单位部门', '工号'])
-        
-        # 计算每个单位部门的总加班时长
-        department_overtime = df_sorted.groupby(['单位', '部门', '单位部门'])['加班时长'].sum().reset_index()
-        department_overtime = department_overtime.sort_values(by='加班时长', ascending=False)
-        
-        # 计算每个单位部门的人数
-        department_counts = df_sorted.groupby(['单位', '部门', '单位部门'])['工号'].nunique().reset_index(name='人数')
+        # 计算每个单位部门的总加班时长，包括加班时长为0的部门
+        department_overtime = df.groupby(['单位', '部门', '单位部门'])['加班时长'].sum().reset_index()
         
         # 计算每个单位部门的人均加班时长
-        department_avg_overtime = pd.merge(department_overtime, department_counts, on=['单位', '部门', '单位部门'])
+        department_avg_overtime = pd.merge(department_overtime, department_counts, on=['单位', '部门', '单位部门'], how='right')
         department_avg_overtime['人均加班时长'] = department_avg_overtime['加班时长'] / department_avg_overtime['人数']
         department_avg_overtime = department_avg_overtime.sort_values(by='人均加班时长', ascending=False)
         
-        # 计算每个单位的总加班时长和人数
-        unit_overtime = df_sorted.groupby('单位')['加班时长'].sum().reset_index()
-        unit_counts = df_sorted.groupby('单位')['工号'].nunique().reset_index(name='人数')
+        # 计算每个单位的总加班时长
+        unit_overtime = df.groupby('单位')['加班时长'].sum().reset_index()
         
         # 计算每个单位的人均加班时长
         unit_avg_overtime = pd.merge(unit_overtime, unit_counts, on='单位')
         unit_avg_overtime['人均加班时长'] = unit_avg_overtime['加班时长'] / unit_avg_overtime['人数']
         unit_avg_overtime = unit_avg_overtime.sort_values(by='人均加班时长', ascending=False)
+        
+        # 计算个人总加班时长并排序
+        personal_overtime_summary = df.groupby(['工号', '姓名', '单位', '部门', '单位部门'])['加班时长'].sum().reset_index()
+        personal_overtime_summary = personal_overtime_summary.sort_values(by='加班时长', ascending=False)
+        
+        # 确保df_sorted被正确定义
+        df_sorted = df.sort_values(by=['单位部门', '工号'])
         
         # 创建Excel文件
         output = BytesIO()
@@ -144,9 +151,16 @@ def index():
             department_avg_overtime.to_excel(writer, sheet_name='单位部门人均加班时长', index=False, columns=['单位', '部门', '单位部门', '人数', '人均加班时长'])
             # 输出包含"单位"、"人数"和"人均加班时长"的单位人均加班时长
             unit_avg_overtime.to_excel(writer, sheet_name='单位人均加班时长', index=False, columns=['单位', '人数', '人均加班时长'])
+            # 输出个人加班时长汇总
+            personal_overtime_summary.to_excel(writer, sheet_name='个人加班时长汇总', index=False, columns=['工号', '姓名', '单位', '部门', '单位部门', '加班时长'])
+            # 输出没有任何加班记录的人员及相关信息
+            df_no_overtime.to_excel(writer, sheet_name='无加班记录', index=False, columns=['工号', '姓名', '单位', '部门', '单位部门'])
         
         # 获取Excel文件对象
         workbook = writer.book
+        # 确保至少有一个sheet是可见的
+        workbook.active = 0  # 设置第一个sheet为可见
+        
         for sheet_name in writer.sheets:
             worksheet = writer.sheets[sheet_name]
             format_worksheet(worksheet)
@@ -157,4 +171,4 @@ def index():
     return render_template('index.html')
 
 if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    app.run(debug=False,host='0.0.0.0',port=5000)
