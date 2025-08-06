@@ -37,10 +37,16 @@ def calculate_overtime(row, non_working_days, working_days):
         # 工作日加班时间计算
         start_overtime = pd.to_datetime('18:30', format='%H:%M')  # 修改为18:30
         end_overtime = pd.to_datetime('23:55', format='%H:%M')
-        for time in card_times:
-            if start_overtime <= time <= end_overtime:
-                overtime += min(end_overtime, time) - start_overtime
-                overtime_period = f"{start_overtime.strftime('%H:%M')} - {time.strftime('%H:%M')}"
+        
+        # 找到所有在加班时间段内的刷卡记录
+        overtime_times = [time for time in card_times if start_overtime <= time <= end_overtime]
+        
+        if overtime_times:
+            # 取最晚的加班刷卡时间
+            latest_overtime = max(overtime_times)
+            # 计算从18:30到最晚刷卡时间的时长
+            overtime = latest_overtime - start_overtime
+            overtime_period = f"{start_overtime.strftime('%H:%M')} - {latest_overtime.strftime('%H:%M')}"
     else:
         # 非工作日加班时间计算
         if len(card_times) > 1:
